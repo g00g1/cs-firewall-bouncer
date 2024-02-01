@@ -91,20 +91,31 @@ func (n *nft) commitDeletedDecisions() error {
 	ip4 := []nftables.SetElement{}
 	ip6 := []nftables.SetElement{}
 
+	var (
+		intervalStart []byte
+		intervalEnd   []byte
+		setElement    nftables.SetElement
+	)
+
 	n.decisionsToDelete = normalizedDecisions(n.decisionsToDelete)
 
 	for _, decision := range n.decisionsToDelete {
-		ip := netip.MustParseAddr(*decision.Value)
-		if _, ok := banned[ip.String()]; !ok {
-			log.Debugf("not deleting %s since it's not in the set", ip)
+		cidr := netip.MustParsePrefix(*decision.Value)
+		if _, ok := banned[cidr.String()]; !ok {
+			log.Debugf("not deleting %s since it's not in the set", cidr.String())
 			continue
 		}
 
-		log.Tracef("adding %s to buffer", ip.String())
-		if ip.Is6() {
-			ip6 = append(ip6, nftables.SetElement{Key: ip.AsSlice()})
-		} else if ip.Is4() {
-			ip4 = append(ip4, nftables.SetElement{Key: ip.AsSlice()})
+		log.Tracef("adding %s to buffer", cidr.String())
+
+		intervalStart = cidr.Addr().AsSlice()
+		intervalEnd = getPrefixLastAddr(&cidr).AsSlice()
+		setElement = nftables.SetElement{Key: intervalStart, KeyEnd: intervalEnd}
+
+		if cidr.Addr().Is6() {
+			ip6 = append(ip6, setElement)
+		} else if cidr.Addr().Is4() {
+			ip4 = append(ip4, setElement)
 		}
 	}
 
@@ -134,22 +145,33 @@ func (n *nft) commitAddedDecisions() error {
 	ip4 := []nftables.SetElement{}
 	ip6 := []nftables.SetElement{}
 
+	var (
+		intervalStart []byte
+		intervalEnd   []byte
+		setElement    nftables.SetElement
+	)
+
 	n.decisionsToAdd = normalizedDecisions(n.decisionsToAdd)
 
 	for _, decision := range n.decisionsToAdd {
-		ip := netip.MustParseAddr(*decision.Value)
-		if _, ok := banned[ip.String()]; ok {
-			log.Debugf("not adding %s since it's already in the set", ip)
+		cidr := netip.MustParsePrefix(*decision.Value)
+		if _, ok := banned[cidr.String()]; ok {
+			log.Debugf("not adding %s since it's already in the set", cidr.String())
 			continue
 		}
 
 		t, _ := time.ParseDuration(*decision.Duration)
 
-		log.Tracef("adding %s to buffer", ip)
-		if ip.BitLen() == 128 {
-			ip6 = append(ip6, nftables.SetElement{Timeout: t, Key: ip.AsSlice()})
-		} else if ip.BitLen() == 32 {
-			ip4 = append(ip4, nftables.SetElement{Timeout: t, Key: ip.AsSlice()})
+		log.Tracef("adding %s to buffer", cidr.String())
+
+		intervalStart = cidr.Addr().AsSlice()
+		intervalEnd = getPrefixLastAddr(&cidr).AsSlice()
+		setElement = nftables.SetElement{Key: intervalStart, KeyEnd: intervalEnd, Timeout: t}
+
+		if cidr.Addr().Is6() {
+			ip6 = append(ip6, setElement)
+		} else if cidr.Addr().Is4() {
+			ip4 = append(ip4, setElement)
 		}
 	}
 
@@ -168,6 +190,7 @@ func (n *nft) commitAddedDecisions() error {
 	return nil
 }
 
+// FIXME: added decisions got lost on failing to delete decisions
 func (n *nft) Commit() error {
 	defer n.reset()
 
@@ -187,19 +210,52 @@ func normalizedDecisions(decisions []*models.Decision) []*models.Decision {
 	vals := make(map[string]time.Duration)
 	finalDecisions := make([]*models.Decision, 0)
 
+	var (
+		scope    string
+		rawValue []string
+	)
+
 	for _, d := range decisions {
+		switch scope = strings.ToLower(*d.Scope); scope {
+		case "ip":
+		case "range":
+			break
+		default:
+			continue
+		}
+
+		if scope == "ip" {
+			rawValue = strings.Split(*d.Value, "/")
+
+			if len(rawValue) >= 2 {
+				rawValue[1] = "32"
+
+				if len(rawValue) > 2 {
+					rawValue = rawValue[:1]
+				}
+			} else {
+				rawValue = append(rawValue, "32")
+			}
+
+			*d.Value = strings.Join(rawValue, "")
+		}
+
+		if _, err := netip.ParsePrefix(*d.Value); err != nil {
+			continue
+		}
+
 		t, err := time.ParseDuration(*d.Duration)
 		if err != nil {
 			t, _ = time.ParseDuration(defaultTimeout)
 		}
 
-		*d.Value = strings.Split(*d.Value, "/")[0]
 		vals[*d.Value] = maxTime(t, vals[*d.Value])
 	}
 
-	for ip, duration := range vals {
+	// FIXME: aggregate final prefixes to prevent collisions
+	for cidr, duration := range vals {
 		d := duration.String()
-		i := ip // copy it because we don't same value for all decisions as `ip` is same pointer :)
+		i := cidr // copy it because we don't same value for all decisions as `cidr` is same pointer :)
 
 		finalDecisions = append(finalDecisions, &models.Decision{
 			Duration: &d,
@@ -208,6 +264,23 @@ func normalizedDecisions(decisions []*models.Decision) []*models.Decision {
 	}
 
 	return finalDecisions
+}
+
+func getPrefixLastAddr(net *netip.Prefix) netip.Addr {
+	ipNet := net.Addr()      // prefix's first IP address
+	netBits := net.Bits()    // length of the prefix (i.e. 24 bits)
+	ipBits := ipNet.BitLen() // size of the IP address (i.e. 32 bits)
+	mask := ipBits - netBits
+	rawIp := ipNet.AsSlice()
+
+	for i := (ipBits / 8) - 1; mask > 0; i-- {
+		rawIp[i] |= 0xFF & ((1 << min(8, mask)) - 1)
+		mask -= 8
+	}
+
+	ipNetLast, _ := netip.AddrFromSlice(rawIp)
+
+	return ipNetLast
 }
 
 func (n *nft) Delete(decision *models.Decision) error {

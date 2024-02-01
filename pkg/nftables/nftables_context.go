@@ -165,6 +165,7 @@ func (c *nftContext) initOwnTable(denyLog bool, denyLogPrefix string, denyAction
 		KeyType:      c.typeIPAddr,
 		KeyByteOrder: binaryutil.BigEndian,
 		HasTimeout:   true,
+		Interval:     true,
 	}
 
 	if err := c.conn.AddSet(set, []nftables.SetElement{}); err != nil {
