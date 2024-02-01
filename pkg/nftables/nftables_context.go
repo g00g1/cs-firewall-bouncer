@@ -5,7 +5,7 @@ package nftables
 
 import (
 	"fmt"
-	"net"
+	"net/netip"
 	"strings"
 
 	"github.com/google/nftables"
@@ -47,7 +47,9 @@ type nftContext struct {
 
 // convert a binary representation of an IP (4 or 16 bytes) to a string.
 func reprIP(ip []byte) string {
-	return net.IP(ip).String()
+	ipObject, _ := netip.AddrFromSlice(ip)
+
+	return ipObject.String()
 }
 
 func NewNFTContext(target *types.NftablesTargetConfig) *nftContext {
@@ -103,7 +105,9 @@ func (c *nftContext) setBanned(banned map[string]struct{}) error {
 	}
 
 	for _, el := range elements {
-		banned[net.IP(el.Key).String()] = struct{}{}
+		ipObject, _ := netip.AddrFromSlice(el.Key)
+
+		banned[ipObject.String()] = struct{}{}
 	}
 
 	return nil

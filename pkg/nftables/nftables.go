@@ -5,7 +5,7 @@ package nftables
 
 import (
 	"fmt"
-	"net"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -94,17 +94,17 @@ func (n *nft) commitDeletedDecisions() error {
 	n.decisionsToDelete = normalizedDecisions(n.decisionsToDelete)
 
 	for _, decision := range n.decisionsToDelete {
-		ip := net.ParseIP(*decision.Value)
+		ip := netip.MustParseAddr(*decision.Value)
 		if _, ok := banned[ip.String()]; !ok {
 			log.Debugf("not deleting %s since it's not in the set", ip)
 			continue
 		}
 
-		log.Tracef("adding %s to buffer", ip)
-		if strings.Contains(ip.String(), ":") {
-			ip6 = append(ip6, nftables.SetElement{Key: ip.To16()})
-		} else {
-			ip4 = append(ip4, nftables.SetElement{Key: ip.To4()})
+		log.Tracef("adding %s to buffer", ip.String())
+		if ip.Is6() {
+			ip6 = append(ip6, nftables.SetElement{Key: ip.AsSlice()})
+		} else if ip.Is4() {
+			ip4 = append(ip4, nftables.SetElement{Key: ip.AsSlice()})
 		}
 	}
 
@@ -137,7 +137,7 @@ func (n *nft) commitAddedDecisions() error {
 	n.decisionsToAdd = normalizedDecisions(n.decisionsToAdd)
 
 	for _, decision := range n.decisionsToAdd {
-		ip := net.ParseIP(*decision.Value)
+		ip := netip.MustParseAddr(*decision.Value)
 		if _, ok := banned[ip.String()]; ok {
 			log.Debugf("not adding %s since it's already in the set", ip)
 			continue
@@ -146,10 +146,10 @@ func (n *nft) commitAddedDecisions() error {
 		t, _ := time.ParseDuration(*decision.Duration)
 
 		log.Tracef("adding %s to buffer", ip)
-		if strings.Contains(ip.String(), ":") {
-			ip6 = append(ip6, nftables.SetElement{Timeout: t, Key: ip.To16()})
-		} else {
-			ip4 = append(ip4, nftables.SetElement{Timeout: t, Key: ip.To4()})
+		if ip.BitLen() == 128 {
+			ip6 = append(ip6, nftables.SetElement{Timeout: t, Key: ip.AsSlice()})
+		} else if ip.BitLen() == 32 {
+			ip4 = append(ip4, nftables.SetElement{Timeout: t, Key: ip.AsSlice()})
 		}
 	}
 
