@@ -62,7 +62,12 @@ func (n *nft) Init() error {
 }
 
 func (n *nft) Add(decision *models.Decision) error {
+	if err := convertDecision(decision); err != nil {
+		return err
+	}
+
 	n.decisionsToAdd = append(n.decisionsToAdd, decision)
+
 	return nil
 }
 
@@ -94,7 +99,7 @@ func (n *nft) commitDeletedDecisions() error {
 	var (
 		intervalStart []byte
 		intervalEnd   []byte
-		setElement    nftables.SetElement
+		setElements   []nftables.SetElement
 	)
 
 	n.decisionsToDelete = normalizedDecisions(n.decisionsToDelete)
@@ -109,13 +114,16 @@ func (n *nft) commitDeletedDecisions() error {
 		log.Tracef("adding %s to buffer", cidr.String())
 
 		intervalStart = cidr.Addr().AsSlice()
-		intervalEnd = getPrefixLastAddr(&cidr).AsSlice()
-		setElement = nftables.SetElement{Key: intervalStart, KeyEnd: intervalEnd}
+		intervalEnd = getPrefixLastAddr(&cidr).Next().AsSlice()
+		setElements = []nftables.SetElement{
+			{Key: intervalStart},
+			{Key: intervalEnd, IntervalEnd: true},
+		}
 
 		if cidr.Addr().Is6() {
-			ip6 = append(ip6, setElement)
+			ip6 = append(ip6, setElements...)
 		} else if cidr.Addr().Is4() {
-			ip4 = append(ip4, setElement)
+			ip4 = append(ip4, setElements...)
 		}
 	}
 
@@ -148,7 +156,7 @@ func (n *nft) commitAddedDecisions() error {
 	var (
 		intervalStart []byte
 		intervalEnd   []byte
-		setElement    nftables.SetElement
+		setElements   []nftables.SetElement
 	)
 
 	n.decisionsToAdd = normalizedDecisions(n.decisionsToAdd)
@@ -165,13 +173,16 @@ func (n *nft) commitAddedDecisions() error {
 		log.Tracef("adding %s to buffer", cidr.String())
 
 		intervalStart = cidr.Addr().AsSlice()
-		intervalEnd = getPrefixLastAddr(&cidr).AsSlice()
-		setElement = nftables.SetElement{Key: intervalStart, KeyEnd: intervalEnd, Timeout: t}
+		intervalEnd = getPrefixLastAddr(&cidr).Next().AsSlice()
+		setElements = []nftables.SetElement{
+			{Key: intervalStart, Timeout: t},
+			{Key: intervalEnd, IntervalEnd: true},
+		}
 
 		if cidr.Addr().Is6() {
-			ip6 = append(ip6, setElement)
+			ip6 = append(ip6, setElements...)
 		} else if cidr.Addr().Is4() {
-			ip4 = append(ip4, setElement)
+			ip4 = append(ip4, setElements...)
 		}
 	}
 
@@ -205,45 +216,55 @@ func (n *nft) Commit() error {
 	return nil
 }
 
+// converts IP to CIDR
+func convertDecision(d *models.Decision) error {
+	var (
+		scope    string
+		rawValue []string
+		ipAddr   netip.Addr
+		err      error
+	)
+
+	switch scope = strings.ToLower(*d.Scope); scope {
+	case "ip":
+	case "range":
+		break
+	default:
+		return fmt.Errorf("scope must be one of [\"ip\", \"range\"], got %s\n", scope)
+	}
+
+	if scope == "ip" {
+		rawValue = strings.Split(*d.Value, "/")
+		if ipAddr, err = netip.ParseAddr(rawValue[0]); err != nil {
+			return err
+		}
+
+		if len(rawValue) >= 2 {
+			rawValue[1] = fmt.Sprintf("%d", ipAddr.BitLen())
+
+			if len(rawValue) > 2 {
+				rawValue = rawValue[:1]
+			}
+		} else {
+			rawValue = append(rawValue, fmt.Sprintf("%d", ipAddr.BitLen()))
+		}
+
+		*d.Value = strings.Join(rawValue, "/")
+	}
+
+	if _, err := netip.ParsePrefix(*d.Value); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // remove duplicates, normalize decision timeouts, keep the longest decision when dups are present.
 func normalizedDecisions(decisions []*models.Decision) []*models.Decision {
 	vals := make(map[string]time.Duration)
 	finalDecisions := make([]*models.Decision, 0)
 
-	var (
-		scope    string
-		rawValue []string
-	)
-
 	for _, d := range decisions {
-		switch scope = strings.ToLower(*d.Scope); scope {
-		case "ip":
-		case "range":
-			break
-		default:
-			continue
-		}
-
-		if scope == "ip" {
-			rawValue = strings.Split(*d.Value, "/")
-
-			if len(rawValue) >= 2 {
-				rawValue[1] = "32"
-
-				if len(rawValue) > 2 {
-					rawValue = rawValue[:1]
-				}
-			} else {
-				rawValue = append(rawValue, "32")
-			}
-
-			*d.Value = strings.Join(rawValue, "")
-		}
-
-		if _, err := netip.ParsePrefix(*d.Value); err != nil {
-			continue
-		}
-
 		t, err := time.ParseDuration(*d.Duration)
 		if err != nil {
 			t, _ = time.ParseDuration(defaultTimeout)
@@ -284,7 +305,12 @@ func getPrefixLastAddr(net *netip.Prefix) netip.Addr {
 }
 
 func (n *nft) Delete(decision *models.Decision) error {
+	if err := convertDecision(decision); err != nil {
+		return err
+	}
+
 	n.decisionsToDelete = append(n.decisionsToDelete, decision)
+
 	return nil
 }
 

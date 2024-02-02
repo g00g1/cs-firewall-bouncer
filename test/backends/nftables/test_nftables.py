@@ -1,5 +1,6 @@
 import json
 import os
+import sys # sys.stderr
 import subprocess
 import unittest
 from ipaddress import ip_address
@@ -181,15 +182,15 @@ class TestNFTables(unittest.TestCase):
         elems = get_set_elements("ip", "crowdsec", "crowdsec-blacklists", with_timeout=True)
         assert len(elems) == 1
         elems = list(elems)
-        assert elems[0][0][0] == "192.0.2.0"
-        assert elems[0][0][1] == "/24"
+        assert elems[0][0]["prefix"]["addr"] == "192.0.2.0"
+        assert elems[0][0]["prefix"]["len"] == 24
 
         # IPv6
         elems = get_set_elements("ip6", "crowdsec6", "crowdsec6-blacklists", with_timeout=True)
         assert len(elems) == 1
         elems = list(elems)
-        assert elems[0][0][0] == "2001:db8::"
-        assert elems[0][0][1] == "/32"
+        assert elems[0][0]["prefix"]["addr"] == "2001:db8::"
+        assert elems[0][0]["prefix"]["len"] == 32
 
 
 def get_set_elements(family, table_name, set_name, with_timeout=False):
@@ -202,5 +203,5 @@ def get_set_elements(family, table_name, set_name, with_timeout=False):
         else:
             if not with_timeout:
                 return {elem["elem"]["val"] for elem in node["set"]["elem"]}
-            return {(elem["elem"]["val"], elem["elem"]["timeout"]) for elem in node["set"]["elem"]}
+            return [(elem["elem"]["val"], elem["elem"]["timeout"]) for elem in node["set"]["elem"]]
     return set()

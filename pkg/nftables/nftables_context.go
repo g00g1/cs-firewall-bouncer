@@ -5,6 +5,7 @@ package nftables
 
 import (
 	"fmt"
+	"math"
 	"net/netip"
 	"strings"
 
@@ -104,10 +105,30 @@ func (c *nftContext) setBanned(banned map[string]struct{}) error {
 		return err
 	}
 
-	for _, el := range elements {
-		ipObject, _ := netip.AddrFromSlice(el.Key)
+	var (
+		ipStartRaw []byte
+		ipEndRaw   []byte
+		ipAddr     netip.Addr
+		ipPrefix   netip.Prefix
+		mask       int
+	)
 
-		banned[ipObject.String()] = struct{}{}
+	for i := 0; i < len(elements); i += 2 {
+		ipStartRaw = elements[i+1].Key
+		ipEndRaw = elements[i].Key
+		mask = 0
+
+		for j := 0; j < len(ipStartRaw); j++ {
+			if ipStartRaw[j] == ipEndRaw[j] {
+				mask += 8
+			} else {
+				mask += 8 - int(math.Log2(float64(int(ipEndRaw[j]-ipStartRaw[j]))))
+			}
+		}
+
+		ipAddr, _ = netip.AddrFromSlice(ipStartRaw)
+		ipPrefix = netip.PrefixFrom(ipAddr, mask)
+		banned[ipPrefix.String()] = struct{}{}
 	}
 
 	return nil
