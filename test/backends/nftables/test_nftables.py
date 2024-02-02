@@ -138,6 +138,9 @@ class TestNFTables(unittest.TestCase):
         ) == set_elements
         assert ip_address("::1:0:3") not in set_elements
 
+        for i in decisions:
+            self.lapi.ds.delete_decisions_by_ip(i["value"])
+
     def test_longest_decision_insertion(self):
         decisions = [
             {
@@ -157,6 +160,36 @@ class TestNFTables(unittest.TestCase):
         elems = list(elems)
         assert elems[0][0] == "123.45.67.12"
         assert abs(elems[0][1] - 200 * 60 * 60) <= 3
+        self.lapi.ds.delete_decisions_by_ip("123.45.67.12")
+
+    def test_range_decision(self):
+        decisions = [
+            {
+                "value": f"{cidr}",
+                "scope": "range",
+                "type": "ban",
+                "origin": "script",
+                "duration": "1h",
+                "reason": "for testing",
+            } for cidr in ["192.0.2.0/24", "2001:db8::/32"]
+        ]
+
+        self.lapi.ds.insert_decisions(decisions)
+        sleep(1)
+
+        # IPv4
+        elems = get_set_elements("ip", "crowdsec", "crowdsec-blacklists", with_timeout=True)
+        assert len(elems) == 1
+        elems = list(elems)
+        assert elems[0][0][0] == "192.0.2.0"
+        assert elems[0][0][1] == "/24"
+
+        # IPv6
+        elems = get_set_elements("ip6", "crowdsec6", "crowdsec6-blacklists", with_timeout=True)
+        assert len(elems) == 1
+        elems = list(elems)
+        assert elems[0][0][0] == "2001:db8::"
+        assert elems[0][0][1] == "/32"
 
 
 def get_set_elements(family, table_name, set_name, with_timeout=False):
