@@ -2,7 +2,7 @@ name: Build + tests
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, g00g1_nft_range_support ]
   pull_request:
     branches: [ main ]
 
